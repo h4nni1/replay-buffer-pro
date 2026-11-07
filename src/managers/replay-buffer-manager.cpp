@@ -11,6 +11,7 @@
 #include "utils/status-reporter.hpp"
 #include "utils/sound-notifier.hpp"
 #include "utils/save-progress.hpp"
+#include "utils/save-efficiency.hpp"
 #include "utils/video-trimmer.hpp"
 
 // OBS includes
@@ -140,6 +141,28 @@ namespace ReplayBufferPro
                                  .arg(duration)
                                  .arg(currentBufferLength));
       }
+      return false;
+    }
+
+    if (inMemoryClips && ring.bufferedSeconds() < static_cast<double>(duration))
+    {
+      const QString message = QString::fromUtf8("Буфер ещё не накопил выбранную длительность. Дождитесь заполнения; короткий клип вместо полного не сохраняется.");
+      SaveProgress::notice(message);
+      StatusReporter::showMessage(message, StatusReporter::FAILURE_TIMEOUT_MS);
+      return false;
+    }
+
+    size_t inflight = captures.size() + (outstanding ? 1 : 0) + (deferred ? 1 : 0);
+    {
+      std::lock_guard<std::mutex> lock(jobMutex);
+      inflight += jobQueue.size() + (workerActive ? 1 : 0);
+    }
+    if (!canAcceptClipRequest(inflight))
+    {
+      const QString message = QString::fromUtf8("Заняты 3 места сохранения. Новый запрос не принят; дождитесь готового клипа и нажмите снова.");
+      SaveProgress::notice(message);
+      StatusReporter::showMessage(message, StatusReporter::FAILURE_TIMEOUT_MS);
+      Logger::warning("Clip request refused: 3 in-flight saves; duration=%ds", duration);
       return false;
     }
 
@@ -791,6 +814,11 @@ namespace ReplayBufferPro
       fail(capture.reason);
       return;
     }
+    if (!hasFullClipDuration(capture.clipSeconds, pending.duration))
+    {
+      fail("history-shorter-than-requested");
+      return;
+    }
 
     obs_output_t *output = ring.attachedOutput();
     const std::string path = output ? ClipWriter::generatePath(output) : std::string();
@@ -816,6 +844,7 @@ namespace ReplayBufferPro
     {
       std::lock_guard<std::mutex> lock(jobMutex);
       jobQueue.emplace_back(std::move(job));
+      SaveProgress::setJobs(jobQueue.size() + (workerActive ? 1 : 0));
     }
     jobCv.notify_one();
   }
@@ -930,6 +959,7 @@ namespace ReplayBufferPro
     {
       std::lock_guard<std::mutex> lock(jobMutex);
       jobQueue.emplace_back(TrimJob{savedPath, request.duration, endOffsetSeconds});
+      SaveProgress::setJobs(jobQueue.size() + (workerActive ? 1 : 0));
     }
     jobCv.notify_one();
   }
@@ -956,12 +986,15 @@ namespace ReplayBufferPro
                             "trimmed clips keep their full length, clips from memory are not written",
                             jobQueue.size());
             jobQueue.clear();
+            SaveProgress::setJobs(0);
           }
           return;
         }
 
         job = std::move(jobQueue.front());
         jobQueue.pop_front();
+        workerActive = true;
+        SaveProgress::setJobs(jobQueue.size() + 1);
       }
 
       if (const auto *trim = std::get_if<TrimJob>(&job))
@@ -971,6 +1004,11 @@ namespace ReplayBufferPro
       else
       {
         processClipJob(std::get<ClipJob>(job));
+      }
+      {
+        std::lock_guard<std::mutex> lock(jobMutex);
+        workerActive = false;
+        SaveProgress::setJobs(jobQueue.size());
       }
     }
   }
@@ -1003,6 +1041,8 @@ namespace ReplayBufferPro
               " elapsed=" + QString::number(elapsedSeconds(), 'f', 1).toStdString() + "s" +
               " original-kept";
 
+      SaveProgress::finish(false, QString(obs_module_text("StatusTrimFailed"))
+          .arg(QString::fromStdString(reason)));
       reportVerdict("failed", line,
                     QString(obs_module_text("StatusTrimFailed"))
                         .arg(QString::fromStdString(reason)),
@@ -1075,6 +1115,8 @@ namespace ReplayBufferPro
 
     line += " elapsed=" + QString::number(elapsedSeconds(), 'f', 1).toStdString() + "s";
 
+    SaveProgress::finish(true, QString(obs_module_text("StatusTrimSuccess"))
+        .arg(formatDurationValue(job.duration)));
     reportVerdict("ok", line,
                   QString(obs_module_text("StatusTrimSuccess"))
                       .arg(formatDurationValue(job.duration)),
@@ -1107,6 +1149,8 @@ namespace ReplayBufferPro
               " requested=" + requested +
               " elapsed=" + QString::number(elapsedSeconds(), 'f', 1).toStdString() + "s";
 
+      SaveProgress::finish(false, QString(obs_module_text("StatusClipFailed"))
+          .arg(QString::fromStdString(reason)));
       reportVerdict("failed", line,
                     QString(obs_module_text("StatusClipFailed"))
                         .arg(QString::fromStdString(reason)),
@@ -1141,12 +1185,21 @@ namespace ReplayBufferPro
       return;
     }
 
+    // Full-duration buttons must not label an incomplete file as a full clip.
+    if (!hasFullClipDuration(actualDuration, job.duration))
+    {
+      fail("output-shorter-than-requested", "full requested duration not present");
+      return;
+    }
+
     if (os_rename(partialPath.c_str(), job.finalPath.c_str()) != 0)
     {
       fail("rename-failed", "could not rename to " + job.finalPath);
       return;
     }
 
+    SaveProgress::finish(true, QString(obs_module_text("StatusTrimSuccess"))
+        .arg(formatDurationValue(job.duration)));
     reportVerdict("ok",
                   "mode=memory file=" + quoted(job.finalPath) +
                       " requested=" + requested +
@@ -1276,10 +1329,11 @@ namespace ReplayBufferPro
                                           const QString &statusMessage, bool isFailure)
   {
     if (std::string(outcome) == "ok") {
-      SaveProgress::finish(true, statusMessage);
       SoundNotifier::notifySuccess();
     } else if (isFailure) {
-      SaveProgress::finish(false, statusMessage);
+      // Preparation errors can arrive on the GUI thread while another clip
+      // is still being written. Do not mark that active write as finished.
+      SaveProgress::notice(statusMessage);
     }
     if (isFailure)
     {

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file packet-ring.cpp
  * @brief Implementation of the replay buffer packet mirror
  */
@@ -139,6 +139,12 @@ namespace ReplayBufferPro
   {
     std::lock_guard<std::mutex> lock(mutex);
     return filled || spanSecondsLocked() >= static_cast<double>(durationSeconds);
+  }
+
+  double PacketRing::bufferedSeconds() const
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    return spanSecondsLocked();
   }
 
   double PacketRing::spanSecondsLocked() const

@@ -110,6 +110,8 @@ target_sources(
     src/utils/logger.hpp
     src/ui/ui-components.cpp
     src/ui/ui-components.hpp
+    src/ui/recording-folder.cpp
+    src/ui/recording-folder.hpp
     src/ui/hotkey-edit.cpp
     src/ui/hotkey-edit.hpp
     src/ui/properties-dialog.cpp
@@ -136,6 +138,9 @@ set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_nam
 # Unit tests for code with no OBS or Qt dependency
 if(ENABLE_TESTS)
   enable_testing()
+  add_executable(hanni-efficiency-test tests/hanni-efficiency-test.cpp)
+  target_include_directories(hanni-efficiency-test PRIVATE src)
+  add_test(NAME hanni-efficiency COMMAND hanni-efficiency-test)
   add_executable(duration-parse-test tests/duration-parse-test.cpp src/utils/duration-parse.cpp)
   target_include_directories(duration-parse-test PRIVATE src)
   add_test(NAME duration-parse COMMAND duration-parse-test)

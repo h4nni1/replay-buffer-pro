@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file video-trimmer.cpp
  * @brief Implementation of video trimming using libavformat
  * @author Joshua Potter
@@ -9,6 +9,7 @@
  */
 
 #include "video-trimmer.hpp"
+#include "utils/save-progress.hpp"
 #include "libav-utils.hpp"
 #include "logger.hpp"
 #include "config/config.hpp"
@@ -422,6 +423,8 @@ TrimResult VideoTrimmer::trimToWindow(const std::string& inputPath,
                 }
 
                 result.packetsWritten++;
+                if (result.packetsWritten % 512 == 0)
+                    SaveProgress::containerBytes(outputCtx->pb ? avio_tell(outputCtx->pb) : 0);
                 av_packet_unref(packet);
             }
 
@@ -438,7 +441,10 @@ TrimResult VideoTrimmer::trimToWindow(const std::string& inputPath,
         }
 
         // Write trailer
+        SaveProgress::containerBytes(outputCtx->pb ? avio_tell(outputCtx->pb) : 0);
+        SaveProgress::verifying();
         ret = av_write_trailer(outputCtx);
+        SaveProgress::containerBytes(outputCtx->pb ? avio_tell(outputCtx->pb) : 0);
         if (ret < 0) {
             Logger::error("Error writing trailer: %s", avErrorString(ret).c_str());
             avformat_close_input(&inputCtx);

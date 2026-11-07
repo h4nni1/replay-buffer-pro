@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file packet-ring.hpp
  * @brief Mirrors the replay buffer's encoded packets so clips can be written from memory
  * @author Joshua Potter
@@ -118,6 +118,9 @@ namespace ReplayBufferPro
      * when the plugin attached after the buffer started.
      */
     bool covers(int durationSeconds) const;
+
+    // Actual retained span, unlike covers() which may accept a filled shorter buffer.
+    double bufferedSeconds() const;
 
     /**
      * @brief Opens a capture that ends at the first packet at or after the press

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file plugin.hpp
  * @brief Header file for the Replay Buffer Pro plugin for OBS Studio
  * @author Joshua Potter
@@ -67,6 +67,9 @@ namespace ReplayBufferPro
      * - Sets up settings monitoring timer
      */
     explicit Plugin(QWidget *parent = nullptr);
+
+    // Independent native-controls view; the original dock remains a fallback.
+    QWidget *createCompactPanel(QWidget *parent);
 
     /**
      * @brief Cleans up resources and removes OBS event callbacks

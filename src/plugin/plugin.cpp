@@ -20,6 +20,10 @@
 #include <QMessageBox>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QPushButton>
+#include <initializer_list>
+#include <exception>
 #include <QSpinBox>
 
 // STL includes
@@ -32,6 +36,7 @@
 #include "config/config.hpp"
 #include "utils/logger.hpp"
 #include "utils/save-progress.hpp"
+#include "ui/recording-folder.hpp"
 
 namespace ReplayBufferPro
 {
@@ -66,6 +71,7 @@ namespace ReplayBufferPro
 			layout->setSpacing(0);
 			layout->addWidget(root);
             layout->addWidget(SaveProgress::createWidget(this));
+            layout->addWidget(RecordingFolder::createWidget(this));
 			setLayout(layout);
 		}
 		
@@ -215,6 +221,49 @@ namespace ReplayBufferPro
 	{
 		replayManager->saveFullBuffer(this);
 	}
+
+    QWidget *Plugin::createCompactPanel(QWidget *parent)
+    {
+        auto *panel = new QWidget(parent);
+        panel->setObjectName("hanniReplayCompactPanel");
+        auto *layout = new QVBoxLayout(panel);
+        layout->setContentsMargins(0, 4, 0, 4);
+        layout->setSpacing(3);
+        auto *row = new QHBoxLayout();
+        row->setSpacing(3);
+        for (const int duration : {60, 300, 600}) {
+            auto *button = new QPushButton(QString::fromUtf8("%1 мин").arg(duration / 60), panel);
+            button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            button->setToolTip(QString::fromUtf8("Сохранить последние %1 минут из доступной истории буфера").arg(duration / 60));
+            connect(button, &QPushButton::clicked, this, [this, duration]() { handleSaveSegment(duration); });
+            row->addWidget(button);
+            auto *timer = new QTimer(button);
+            auto refresh = [this, button, duration]() {
+                const bool active = obs_frontend_replay_buffer_active();
+                int length = 0;
+                try { length = settingsManager->getCurrentBufferLength(); }
+                catch (const std::exception &) { button->setEnabled(false); return; }
+                const bool memory = replayManager->memoryClipsEnabled();
+                const double available = replayManager->availableSeconds();
+                button->setEnabled(active && memory && length >= duration && available >= duration);
+                button->setToolTip(!memory
+                    ? QString::fromUtf8("Включите сохранение клипов из памяти в настройках плагина")
+                    : QString::fromUtf8("Сохранить %1 мин. Накоплено истории: %2 с. После запуска дождитесь заполнения.")
+                        .arg(duration / 60).arg(static_cast<int>(available)));
+            };
+            connect(timer, &QTimer::timeout, this, refresh);
+            timer->start(500);
+            refresh();
+        }
+        layout->addLayout(row);
+        layout->addWidget(SaveProgress::createWidget(panel, true));
+        layout->addWidget(RecordingFolder::createWidget(panel, true));
+        auto *properties = new QPushButton(QString::fromUtf8("Настройки клипов и звука…"), panel);
+        connect(properties, &QPushButton::clicked, this,
+                [this]() { openProperties(PropertiesDialog::Page::Experimental); });
+        layout->addWidget(properties);
+        return panel;
+    }
 
 	void Plugin::handleSaveSegment(int duration)
 	{

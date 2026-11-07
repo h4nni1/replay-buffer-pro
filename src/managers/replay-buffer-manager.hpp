@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file replay-buffer-manager.hpp
  * @brief Manages replay buffer operations for the plugin
  * @author Joshua Potter
@@ -91,6 +91,9 @@ namespace ReplayBufferPro
      * @return Success status
      */
     bool saveSegment(int duration, QWidget *parent = nullptr);
+
+    double availableSeconds() const { return ring.bufferedSeconds(); }
+    bool memoryClipsEnabled() const { return inMemoryClips; }
 
     /**
      * @brief Saves the entire replay buffer without trimming
@@ -479,6 +482,7 @@ namespace ReplayBufferPro
     std::condition_variable jobCv;   ///< Signals the worker
     std::deque<Job> jobQueue;        ///< Files awaiting trimming, clips awaiting writing
     std::thread worker;              ///< Owned so trims cannot outlive the manager
+    bool workerActive = false;       ///< Guarded by jobMutex, includes current write
     bool stopping = false;           ///< Tells the worker to drain and exit
     std::set<std::string> reservedPaths; ///< Clip paths queued but not yet written; guarded by jobMutex
   };

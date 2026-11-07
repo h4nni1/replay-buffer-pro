@@ -13,6 +13,7 @@
 
 #include "clip-writer.hpp"
 #include "utils/save-progress.hpp"
+#include "utils/save-efficiency.hpp"
 #include "libav-utils.hpp"
 #include "logger.hpp"
 
@@ -324,8 +325,8 @@ ClipWriteResult ClipWriter::write(const std::string &path, const ClipStreams &st
         return failure(result, "no-video-packets");
     }
 
-    std::stable_sort(ordered.begin(), ordered.end(),
-                     [](const Ordered &a, const Ordered &b) { return a.dtsUsec < b.dtsUsec; });
+    const auto byDts = [](const Ordered &a, const Ordered &b) { return a.dtsUsec < b.dtsUsec; };
+    stableSortIfNeeded(ordered.begin(), ordered.end(), byDts);
 
     AVFormatContext *outputCtx = nullptr;
     int ret = avformat_alloc_output_context2(&outputCtx, nullptr, nullptr, path.c_str());
@@ -432,7 +433,8 @@ ClipWriteResult ClipWriter::write(const std::string &path, const ClipStreams &st
     for (const Ordered &entry : ordered) {
         ++processed;
         if (processed % 512 == 0 || processed == ordered.size())
-            SaveProgress::packets(processed, ordered.size());
+            SaveProgress::packets(processed, ordered.size(),
+                outputCtx->pb ? avio_tell(outputCtx->pb) : 0);
         const encoder_packet &packet = *entry.packet;
         const bool isVideo = packet.type == OBS_ENCODER_VIDEO;
         AVStream *stream = isVideo ? videoStream : audioStreams[packet.track_idx];
@@ -463,7 +465,10 @@ ClipWriteResult ClipWriter::write(const std::string &path, const ClipStreams &st
 
     av_packet_free(&avPacket);
 
+    SaveProgress::containerBytes(outputCtx->pb ? avio_tell(outputCtx->pb) : 0);
+    SaveProgress::verifying();
     ret = av_write_trailer(outputCtx);
+    SaveProgress::containerBytes(outputCtx->pb ? avio_tell(outputCtx->pb) : 0);
     closeOutput(&outputCtx);
     if (ret < 0) {
         return failure(result, "write-trailer-failed", avErrorString(ret));
