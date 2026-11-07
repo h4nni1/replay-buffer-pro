@@ -37,6 +37,7 @@ class QWidget;
 namespace ReplayBufferPro
 {
   class HotkeyEdit;
+  class CompletionSoundSettings;
 
   /**
    * @brief Properties window with a page list on the left, styled after OBS Settings
@@ -130,6 +131,7 @@ namespace ReplayBufferPro
     QPushButton *checkUpdatesButton;
     QLabel *updateStatusLabel;
     UpdateChecker *updateChecker;
+    CompletionSoundSettings *soundSettings = nullptr;
 
     QWidget *createSaveButtonsPage(const std::vector<SaveButton> &buttons,
                                    const std::vector<obs_key_combination_t> &hotkeys);
@@ -145,7 +147,7 @@ namespace ReplayBufferPro
      */
     void addPage(QWidget *content);
 
-    void apply();
+    bool apply();
 
   };
 

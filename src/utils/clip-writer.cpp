@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file clip-writer.cpp
  * @brief Implementation of writing clips from buffered packets
  * @author Joshua Potter
@@ -12,6 +12,7 @@
  */
 
 #include "clip-writer.hpp"
+#include "utils/save-progress.hpp"
 #include "libav-utils.hpp"
 #include "logger.hpp"
 
@@ -425,8 +426,13 @@ ClipWriteResult ClipWriter::write(const std::string &path, const ClipStreams &st
         return failure(result, "packet-alloc-failed");
     }
 
+    // Progress counts processed packets, not durable disk flushes.
+    size_t processed = 0;
     // ffmpeg_mux_packet()
     for (const Ordered &entry : ordered) {
+        ++processed;
+        if (processed % 512 == 0 || processed == ordered.size())
+            SaveProgress::packets(processed, ordered.size());
         const encoder_packet &packet = *entry.packet;
         const bool isVideo = packet.type == OBS_ENCODER_VIDEO;
         AVStream *stream = isVideo ? videoStream : audioStreams[packet.track_idx];

@@ -8,6 +8,7 @@
 #include "config/config.hpp"
 #include "utils/duration-format.hpp"
 #include "utils/update-checker.hpp"
+#include "utils/sound-notifier.hpp"
 
 // OBS includes
 #include <obs-module.h>
@@ -128,11 +129,11 @@ namespace ReplayBufferPro
     buttonBox->button(QDialogButtonBox::Cancel)->setText(obs_module_text("PropertiesCancel"));
     buttonBox->button(QDialogButtonBox::Apply)->setText(obs_module_text("PropertiesApply"));
     connect(buttonBox, &QDialogButtonBox::accepted, this, [this]() {
-      apply();
-      accept();
+      if (apply())
+        accept();
     });
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    connect(buttonBox->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, &PropertiesDialog::apply);
+    connect(buttonBox->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this]() { apply(); });
 
     auto *contentLayout = new QHBoxLayout();
     contentLayout->addWidget(pageList);
@@ -328,6 +329,9 @@ namespace ReplayBufferPro
     auto *layout = new QVBoxLayout(page);
     layout->addLayout(createSettingRow(obs_module_text("InMemoryClips"), obs_module_text("InMemoryClipsTooltip"),
                                        inMemoryClipsCheckBox, page));
+    soundSettings = new CompletionSoundSettings(page);
+    layout->addSpacing(12);
+    layout->addWidget(soundSettings);
     layout->addStretch();
     return page;
   }
@@ -442,8 +446,13 @@ namespace ReplayBufferPro
     return hotkeyInputs[index]->combination();
   }
 
-  void PropertiesDialog::apply()
+  bool PropertiesDialog::apply()
   {
+    if (soundSettings && !soundSettings->apply())
+    {
+      pageList->setCurrentRow(static_cast<int>(Page::Experimental));
+      return false;
+    }
     // Only the hotkeys just applied; an edit on a hidden row stays pending
     // until its row is shown and applied
     std::vector<size_t> applying = changedHotkeys();
@@ -452,6 +461,7 @@ namespace ReplayBufferPro
     {
       hotkeyInputs[index]->markApplied();
     }
+    return true;
   }
 
 } // namespace ReplayBufferPro

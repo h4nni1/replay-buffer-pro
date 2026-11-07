@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file replay-buffer-manager.cpp
  * @brief Implementation of replay buffer management for the Replay Buffer Pro plugin
  */
@@ -9,6 +9,8 @@
 #include "utils/duration-format.hpp"
 #include "utils/logger.hpp"
 #include "utils/status-reporter.hpp"
+#include "utils/sound-notifier.hpp"
+#include "utils/save-progress.hpp"
 #include "utils/video-trimmer.hpp"
 
 // OBS includes
@@ -1007,6 +1009,7 @@ namespace ReplayBufferPro
                     true);
     };
 
+    SaveProgress::begin(QString::fromStdString(partialPath), job.duration, false);
     Logger::info("Trimming replay buffer save to %d seconds", job.duration);
 
     // A partial left by an earlier crash would otherwise fail the rename
@@ -1027,6 +1030,7 @@ namespace ReplayBufferPro
     // Confirm the file on disk is the length that was asked for. Without this a
     // cut point that collapsed toward the start of the buffer would be reported
     // as a success and the full-length original deleted in its favour.
+    SaveProgress::verifying();
     double actualDuration = 0.0;
     std::string verifyReason;
     if (!verifyTrimmedOutput(partialPath, job.duration, trim.endAt,
@@ -1109,6 +1113,7 @@ namespace ReplayBufferPro
                     true);
     };
 
+    SaveProgress::begin(QString::fromStdString(partialPath), job.duration, true);
     Logger::info("Writing %d second clip from memory", job.duration);
 
     if (os_file_exists(partialPath.c_str()))
@@ -1124,6 +1129,7 @@ namespace ReplayBufferPro
       return;
     }
 
+    SaveProgress::verifying();
     double actualDuration = 0.0;
     std::string verifyReason;
     if (!verifyTrimmedOutput(partialPath, job.duration, job.bufferedSeconds,
@@ -1269,6 +1275,12 @@ namespace ReplayBufferPro
   void ReplayBufferManager::reportVerdict(const char *outcome, const std::string &detail,
                                           const QString &statusMessage, bool isFailure)
   {
+    if (std::string(outcome) == "ok") {
+      SaveProgress::finish(true, statusMessage);
+      SoundNotifier::notifySuccess();
+    } else if (isFailure) {
+      SaveProgress::finish(false, statusMessage);
+    }
     if (isFailure)
     {
       Logger::error("TRIM VERDICT: %s %s", outcome, detail.c_str());

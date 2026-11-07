@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file plugin.cpp
  * @brief Implementation of the Replay Buffer Pro plugin
  *
@@ -31,6 +31,7 @@
 #include "plugin/websocket-command.hpp"
 #include "config/config.hpp"
 #include "utils/logger.hpp"
+#include "utils/save-progress.hpp"
 
 namespace ReplayBufferPro
 {
@@ -64,6 +65,7 @@ namespace ReplayBufferPro
 			layout->setContentsMargins(0, 0, 0, 0);
 			layout->setSpacing(0);
 			layout->addWidget(root);
+            layout->addWidget(SaveProgress::createWidget(this));
 			setLayout(layout);
 		}
 		

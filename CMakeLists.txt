@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.28...3.30)
+﻿cmake_minimum_required(VERSION 3.28...3.30)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
 
@@ -97,6 +97,10 @@ target_sources(
     src/utils/libav-utils.hpp
     src/utils/clip-writer.hpp
     src/utils/packet-window.hpp
+    src/utils/save-progress.cpp
+    src/utils/save-progress.hpp
+    src/utils/sound-notifier.cpp
+    src/utils/sound-notifier.hpp
     src/utils/status-reporter.cpp
     src/utils/status-reporter.hpp
     src/utils/update-checker.cpp
@@ -181,4 +185,8 @@ if(OS_WINDOWS)
 
     COMMENT "Creating release package..."
   )
+endif()
+
+if(WIN32)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE winmm)
 endif()
