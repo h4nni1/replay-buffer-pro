@@ -52,8 +52,12 @@ QString configPath()
 #ifdef _WIN32
 // Query the persistent interface path, not the truncated WinMM display name.
 // Failure is fail-closed: this output is not offered/used, never replaced by mapper.
-QString interfaceId(HWAVEOUT device)
+// These DRV_QUERYDEVICEINTERFACE messages require a device ID, NOT an opened
+// HWAVEOUT handle. Keep that distinction explicit in the function signature.
+QString interfaceId(UINT deviceId)
 {
+    if (deviceId >= waveOutGetNumDevs()) return {}; // No WAVE_MAPPER/default fallback.
+    const auto device = reinterpret_cast<HWAVEOUT>(static_cast<UINT_PTR>(deviceId));
     DWORD bytes = 0;
     if (waveOutMessage(device, DRV_QUERYDEVICEINTERFACESIZE,
                        reinterpret_cast<DWORD_PTR>(&bytes), 0) != MMSYSERR_NOERROR ||
@@ -66,6 +70,27 @@ QString interfaceId(HWAVEOUT device)
     return QString::fromWCharArray(path.data()).toCaseFolded();
 }
 
+bool openedDeviceMatches(HWAVEOUT opened, const QString &expected)
+{
+    UINT deviceId = 0;
+    const MMRESULT result = waveOutGetID(opened, &deviceId);
+    if (result != MMSYSERR_NOERROR) {
+        Logger::warning("Completion sound skipped: cannot resolve opened device ID (%u); no default fallback", result);
+        return false;
+    }
+    const QString actual = interfaceId(deviceId);
+    if (actual.isEmpty()) {
+        Logger::warning("Completion sound skipped: cannot query interface for opened device ID %u", deviceId);
+        return false;
+    }
+    if (actual != expected) {
+        Logger::warning("Completion sound skipped: output identity changed while opening (device ID %u)", deviceId);
+        return false;
+    }
+    Logger::info("Completion sound: explicit output verified through waveOutGetID (%u)", deviceId);
+    return true;
+}
+
 QVector<SoundNotifier::Device> enumerateOutputs()
 {
     QVector<SoundNotifier::Device> result;
@@ -74,8 +99,7 @@ QVector<SoundNotifier::Device> enumerateOutputs()
         WAVEOUTCAPSW caps{};
         if (waveOutGetDevCapsW(index, &caps, sizeof(caps)) != MMSYSERR_NOERROR)
             continue;
-        const auto device = reinterpret_cast<HWAVEOUT>(static_cast<UINT_PTR>(index));
-        const QString id = interfaceId(device);
+        const QString id = interfaceId(index);
         if (id.isEmpty())
             continue;
         // Ambiguous IDs are rejected at playback rather than selecting arbitrarily.
@@ -215,7 +239,7 @@ struct SoundNotifier::Worker {
         int matches = 0;
         const UINT count = waveOutGetNumDevs();
         for (UINT i = 0; i < count; ++i) {
-            if (interfaceId(reinterpret_cast<HWAVEOUT>(static_cast<UINT_PTR>(i))) == id) {
+            if (interfaceId(i) == id) {
                 chosen = i;
                 ++matches;
             }
@@ -259,9 +283,9 @@ struct SoundNotifier::Worker {
             reinterpret_cast<DWORD_PTR>(playback->done), 0, CALLBACK_EVENT | WAVE_FORMAT_DIRECT);
         if (opened != MMSYSERR_NOERROR) {
             Logger::warning("Completion sound skipped: selected output cannot open (%u); no default fallback", opened);
-        } else if (interfaceId(playback->device) != id) {
-            // Recheck the opened handle too: hotplug can reorder WinMM indices.
-            Logger::warning("Completion sound skipped: output identity changed while opening");
+        } else if (!openedDeviceMatches(playback->device, id)) {
+            // Identity was checked via waveOutGetID, not by treating the open
+            // handle as a numeric endpoint ID. Fail closed on real mismatch.
         } else if (!stopping.load()) {
             playback->header.lpData = reinterpret_cast<LPSTR>(playback->samples.data());
             playback->header.dwBufferLength = static_cast<DWORD>(playback->samples.size() * sizeof(int16_t));
@@ -272,6 +296,7 @@ struct SoundNotifier::Worker {
                 ResetEvent(playback->done);
                 code = waveOutWrite(playback->device, &playback->header, sizeof(WAVEHDR));
                 if (code == MMSYSERR_NOERROR) {
+                    Logger::info("Completion sound: PCM submitted to explicitly selected output (volume=%d)", volume);
                     HANDLE events[] = {stopEvent, playback->done};
                     // No audio waits on OBS/Qt's main or clip-writing thread.
                     const ULONGLONG deadline = GetTickCount64() + 2000;
@@ -324,7 +349,10 @@ void SoundNotifier::initialize()
 {
     Q_ASSERT(QCoreApplication::instance() && QThread::currentThread() == QCoreApplication::instance()->thread());
     std::lock_guard<std::mutex> lock(instanceMutex);
-    if (!instance) instance = new SoundNotifier();
+    if (!instance) {
+        instance = new SoundNotifier();
+        Logger::info("Completion sound fix 4: opened endpoint verification uses waveOutGetID");
+    }
 }
 void SoundNotifier::shutdown()
 {
