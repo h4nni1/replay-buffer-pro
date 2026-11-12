@@ -229,40 +229,112 @@ namespace ReplayBufferPro
         auto *layout = new QVBoxLayout(panel);
         layout->setContentsMargins(0, 4, 0, 4);
         layout->setSpacing(3);
-        auto *row = new QHBoxLayout();
+
+        // Keep the row in its own host so applying settings can replace its
+        // contents without disturbing the progress or recording-folder widgets.
+        auto *buttonHost = new QWidget(panel);
+        buttonHost->setObjectName("hanniReplayCompactButtonHost");
+        auto *row = new QHBoxLayout(buttonHost);
+        row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(3);
-        for (const int duration : {60, 300, 600}) {
-            auto *button = new QPushButton(QString::fromUtf8("%1 мин").arg(duration / 60), panel);
-            button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-            button->setToolTip(QString::fromUtf8("Сохранить последние %1 минут из доступной истории буфера").arg(duration / 60));
-            connect(button, &QPushButton::clicked, this, [this, duration]() { handleSaveSegment(duration); });
-            row->addWidget(button);
-            auto *timer = new QTimer(button);
-            auto refresh = [this, button, duration]() {
-                const bool active = obs_frontend_replay_buffer_active();
-                int length = 0;
-                try { length = settingsManager->getCurrentBufferLength(); }
-                catch (const std::exception &) { button->setEnabled(false); return; }
-                const bool memory = replayManager->memoryClipsEnabled();
-                const double available = replayManager->availableSeconds();
-                button->setEnabled(active && memory && length >= duration && available >= duration);
-                button->setToolTip(!memory
-                    ? QString::fromUtf8("Включите сохранение клипов из памяти в настройках плагина")
-                    : QString::fromUtf8("Сохранить %1 мин. Накоплено истории: %2 с. После запуска дождитесь заполнения.")
-                        .arg(duration / 60).arg(static_cast<int>(available)));
-            };
-            connect(timer, &QTimer::timeout, this, refresh);
-            timer->start(500);
-            refresh();
-        }
-        layout->addLayout(row);
+        layout->addWidget(buttonHost);
         layout->addWidget(SaveProgress::createWidget(panel, true));
         layout->addWidget(RecordingFolder::createWidget(panel, true));
         auto *properties = new QPushButton(QString::fromUtf8("Настройки клипов и звука…"), panel);
         connect(properties, &QPushButton::clicked, this,
                 [this]() { openProperties(PropertiesDialog::Page::Experimental); });
         layout->addWidget(properties);
+
+        compactPanel = panel;
+        compactButtonHost = buttonHost;
+
+        // The timer belongs to the panel, while the connection context belongs
+        // to the plugin.  Thus deleting either side cannot leave a callback
+        // using a stale plugin or a stale button row.
+        auto *timer = new QTimer(panel);
+        timer->setInterval(500);
+        connect(timer, &QTimer::timeout, this, [this]() { updateCompactButtonStates(); });
+        timer->start();
+
+        rebuildCompactButtons();
         return panel;
+    }
+
+    void Plugin::rebuildCompactButtons()
+    {
+        if (!compactButtonHost || !pluginProperties)
+            return;
+
+        auto *row = qobject_cast<QHBoxLayout *>(compactButtonHost->layout());
+        if (!row)
+            return;
+
+        // This runs on the Qt GUI thread from PropertiesDialog::applied().
+        // Remove the old buttons and their signal connections before adding the
+        // new captured durations, so no button can retain an old setting.
+        while (QLayoutItem *item = row->takeAt(0)) {
+            if (QWidget *widget = item->widget())
+                delete widget;
+            delete item;
+        }
+
+        for (const SaveButton &saveButton : pluginProperties->getButtons()) {
+            const int duration = saveButton.seconds;
+            const QString durationText = duration % 60 == 0
+                ? QString::fromUtf8("%1 мин").arg(duration / 60)
+                : QString::fromUtf8("%1 с").arg(duration);
+            const QString buttonText = saveButton.label.empty()
+                ? durationText
+                : QString::fromStdString(saveButton.label);
+            auto *button = new QPushButton(buttonText, compactButtonHost);
+            button->setProperty("hanniDuration", duration);
+            button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            button->setToolTip(QString::fromUtf8("Сохранить последние %1 из доступной истории буфера")
+                                   .arg(durationText));
+            connect(button, &QPushButton::clicked, this,
+                    [this, duration]() { handleSaveSegment(duration); });
+            row->addWidget(button);
+        }
+
+        updateCompactButtonStates();
+    }
+
+    void Plugin::updateCompactButtonStates()
+    {
+        if (!compactButtonHost || !settingsManager || !replayManager)
+            return;
+
+        auto *row = qobject_cast<QHBoxLayout *>(compactButtonHost->layout());
+        if (!row)
+            return;
+
+        const bool active = obs_frontend_replay_buffer_active();
+        int length = 0;
+        try {
+            length = settingsManager->getCurrentBufferLength();
+        }
+        catch (const std::exception &) {
+            for (int i = 0; i < row->count(); ++i) {
+                if (auto *button = qobject_cast<QPushButton *>(row->itemAt(i)->widget()))
+                    button->setEnabled(false);
+            }
+            return;
+        }
+
+        const bool memory = replayManager->memoryClipsEnabled();
+        const double available = replayManager->availableSeconds();
+        for (int i = 0; i < row->count(); ++i) {
+            auto *button = qobject_cast<QPushButton *>(row->itemAt(i)->widget());
+            if (!button)
+                continue;
+
+            const int duration = button->property("hanniDuration").toInt();
+            button->setEnabled(active && memory && length >= duration && available >= duration);
+            button->setToolTip(!memory
+                ? QString::fromUtf8("Включите сохранение клипов из памяти в настройках плагина")
+                : QString::fromUtf8("Сохранить последние %1 с. Накоплено истории: %2 с. После запуска дождитесь заполнения.")
+                    .arg(duration).arg(static_cast<int>(available)));
+        }
     }
 
 	void Plugin::handleSaveSegment(int duration)
@@ -315,6 +387,7 @@ namespace ReplayBufferPro
 		}
 
 		ui->setSaveButtons(pluginProperties->getButtons());
+		rebuildCompactButtons();
 		// Registers hotkeys for added buttons before their bindings are set below
 		hotkeyManager->setButtons(pluginProperties->getButtons());
 

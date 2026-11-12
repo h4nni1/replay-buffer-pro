@@ -1,0 +1,197 @@
+﻿cmake_minimum_required(VERSION 3.28...3.30)
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
+
+project(${_name} VERSION ${_version})
+
+option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
+option(ENABLE_QT "Use Qt functionality" ON)
+option(ENABLE_TESTS "Build unit tests" OFF)
+
+include(compilerconfig)
+include(defaults)
+include(helpers)
+
+add_library(${CMAKE_PROJECT_NAME} MODULE)
+
+find_package(libobs REQUIRED)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
+
+if(ENABLE_FRONTEND_API)
+  find_package(obs-frontend-api REQUIRED)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
+endif()
+
+if(ENABLE_QT)
+  find_package(Qt6 REQUIRED COMPONENTS Widgets Core)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
+  
+  # On macOS, remove AGL from Qt6 targets (AGL is deprecated/removed in modern macOS but Qt6 still references it)
+  if(OS_MACOS)
+    foreach(_qt_target IN ITEMS Qt6::Core Qt6::Gui Qt6::Widgets WrapOpenGL::WrapOpenGL)
+      if(TARGET ${_qt_target})
+        foreach(_qt_prop IN ITEMS INTERFACE_LINK_LIBRARIES INTERFACE_LINK_OPTIONS)
+          get_target_property(_qt_prop_value ${_qt_target} ${_qt_prop})
+          if(_qt_prop_value)
+            set(_qt_prop_cleaned "${_qt_prop_value}")
+            string(REPLACE "-framework;AGL;" "" _qt_prop_cleaned "${_qt_prop_cleaned}")
+            string(REPLACE ";-framework;AGL" "" _qt_prop_cleaned "${_qt_prop_cleaned}")
+            string(REPLACE "-framework;AGL" "" _qt_prop_cleaned "${_qt_prop_cleaned}")
+            string(REPLACE "-framework AGL" "" _qt_prop_cleaned "${_qt_prop_cleaned}")
+            string(REPLACE "/System/Library/Frameworks/AGL.framework" "" _qt_prop_cleaned "${_qt_prop_cleaned}")
+            if(NOT _qt_prop_cleaned STREQUAL _qt_prop_value)
+              set_property(TARGET ${_qt_target} PROPERTY ${_qt_prop} "${_qt_prop_cleaned}")
+            endif()
+          endif()
+        endforeach()
+      endif()
+    endforeach()
+  endif()
+  
+  target_compile_options(
+    ${CMAKE_PROJECT_NAME}
+    PRIVATE $<$<C_COMPILER_ID:Clang,AppleClang>:-Wno-quoted-include-in-framework-header -Wno-comma>
+  )
+  set_target_properties(
+    ${CMAKE_PROJECT_NAME}
+    PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON
+  )
+endif()
+
+# FFmpeg libraries (from prebuilt obs-deps)
+find_path(AVFORMAT_INCLUDE_DIR libavformat/avformat.h)
+find_library(AVFORMAT_LIBRARY NAMES avformat)
+find_library(AVCODEC_LIBRARY NAMES avcodec)
+find_library(AVUTIL_LIBRARY NAMES avutil)
+
+if(NOT AVFORMAT_LIBRARY OR NOT AVCODEC_LIBRARY OR NOT AVUTIL_LIBRARY)
+  message(FATAL_ERROR "FFmpeg libraries (avformat, avcodec, avutil) not found in CMAKE_PREFIX_PATH. "
+    "These are required for video trimming functionality.")
+endif()
+
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${AVFORMAT_INCLUDE_DIR})
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ${AVFORMAT_LIBRARY} ${AVCODEC_LIBRARY} ${AVUTIL_LIBRARY})
+
+# libcurl for the About page's update check (OBS links and ships it too)
+find_package(CURL REQUIRED)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE CURL::libcurl)
+
+# Plugin sources
+target_sources(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE
+    src/main.cpp
+    src/plugin/plugin.cpp
+    src/plugin/plugin.hpp
+    src/plugin/websocket-command.cpp
+    src/plugin/websocket-command.hpp
+    src/utils/obs-utils.cpp
+    src/utils/obs-utils.hpp
+    src/utils/duration-format.cpp
+    src/utils/duration-format.hpp
+    src/utils/duration-parse.cpp
+    src/utils/duration-parse.hpp
+    src/utils/video-trimmer.cpp
+    src/utils/video-trimmer.hpp
+    src/utils/clip-writer.cpp
+    src/utils/libav-utils.hpp
+    src/utils/clip-writer.hpp
+    src/utils/packet-window.hpp
+    src/utils/save-progress.cpp
+    src/utils/save-progress.hpp
+    src/utils/sound-notifier.cpp
+    src/utils/sound-notifier.hpp
+    src/utils/status-reporter.cpp
+    src/utils/status-reporter.hpp
+    src/utils/update-checker.cpp
+    src/utils/update-checker.hpp
+    src/utils/version-compare.cpp
+    src/utils/version-compare.hpp
+    src/utils/logger.hpp
+    src/ui/ui-components.cpp
+    src/ui/ui-components.hpp
+    src/ui/recording-folder.cpp
+    src/ui/recording-folder.hpp
+    src/ui/hotkey-edit.cpp
+    src/ui/hotkey-edit.hpp
+    src/ui/properties-dialog.cpp
+    src/ui/properties-dialog.hpp
+    src/managers/settings-manager.cpp
+    src/managers/settings-manager.hpp
+    src/managers/plugin-properties.cpp
+    src/managers/plugin-properties.hpp
+    src/managers/replay-buffer-manager.cpp
+    src/managers/replay-buffer-manager.hpp
+    src/managers/packet-ring.cpp
+    src/managers/packet-ring.hpp
+    src/managers/hotkey-manager.cpp
+    src/managers/hotkey-manager.hpp
+    src/config/config.hpp
+)
+
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src)
+# Shown on the Properties window's About page
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PLUGIN_VERSION="${PLUGIN_VERSION}")
+
+set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
+
+# Unit tests for code with no OBS or Qt dependency
+if(ENABLE_TESTS)
+  enable_testing()
+  add_executable(hanni-efficiency-test tests/hanni-efficiency-test.cpp)
+  target_include_directories(hanni-efficiency-test PRIVATE src)
+  add_test(NAME hanni-efficiency COMMAND hanni-efficiency-test)
+  add_executable(duration-parse-test tests/duration-parse-test.cpp src/utils/duration-parse.cpp)
+  target_include_directories(duration-parse-test PRIVATE src)
+  add_test(NAME duration-parse COMMAND duration-parse-test)
+
+  add_executable(packet-window-test tests/packet-window-test.cpp)
+  target_include_directories(packet-window-test PRIVATE src)
+  add_test(NAME packet-window COMMAND packet-window-test)
+
+  add_executable(version-compare-test tests/version-compare-test.cpp src/utils/version-compare.cpp)
+  target_include_directories(version-compare-test PRIVATE src)
+  add_test(NAME version-compare COMMAND version-compare-test)
+endif()
+
+# Release package configuration (Windows only)
+if(OS_WINDOWS)
+  set(RELEASE_STAGING "${CMAKE_BINARY_DIR}/release-package")
+  set(RELEASE_DIR "${RELEASE_STAGING}/obs-studio")
+  set(RELEASE_PLUGIN_DIR "${RELEASE_DIR}/plugins/${CMAKE_PROJECT_NAME}/bin/64bit")
+  set(RELEASE_DATA_DIR "${RELEASE_DIR}/plugins/${CMAKE_PROJECT_NAME}/data")
+  set(RELEASE_ZIP_DIR "${CMAKE_BINARY_DIR}/releases/${PROJECT_VERSION}")
+  set(RELEASE_ZIP "${RELEASE_ZIP_DIR}/${CMAKE_PROJECT_NAME}-windows-x64.zip")
+
+  add_custom_target(prepare_release
+    DEPENDS ${CMAKE_PROJECT_NAME}
+    # Wipe any stale staging files so the zip only contains the current layout
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${RELEASE_STAGING}"
+    # Create directory structure
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RELEASE_PLUGIN_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RELEASE_DATA_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RELEASE_ZIP_DIR}"
+
+    # Copy plugin DLL
+    COMMAND ${CMAKE_COMMAND} -E copy
+      "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
+      "${RELEASE_PLUGIN_DIR}/"
+
+    # Copy data files (locale)
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_SOURCE_DIR}/data"
+      "${RELEASE_DATA_DIR}"
+
+    # Create ZIP file (run from the staging root so the archive contains
+    # "obs-studio/..." at its top level, with no staging-dir wrapper)
+    COMMAND ${CMAKE_COMMAND} -E chdir "${RELEASE_STAGING}"
+      ${CMAKE_COMMAND} -E tar "cf" "${RELEASE_ZIP}" --format=zip
+      "obs-studio"
+
+    COMMENT "Creating release package..."
+  )
+endif()
+
+if(WIN32)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE winmm)
+endif()

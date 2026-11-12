@@ -26,6 +26,7 @@
 // Qt includes
 #include <QWidget>
 #include <QTimer>
+#include <QPointer>
 
 // Local includes
 #include "ui/ui-components.hpp"
@@ -131,6 +132,8 @@ namespace ReplayBufferPro
     HotkeyManager *hotkeyManager;       ///< Hotkey manager
     QTimer *settingsMonitorTimer;       ///< Timer for monitoring OBS settings changes
     int lastKnownBufferLength;          ///< Last known buffer length from OBS settings
+    QPointer<QWidget> compactPanel;     ///< Native controls panel, if embedded
+    QPointer<QWidget> compactButtonHost; ///< Host for the dynamic native buttons
 
     //=========================================================================
     // INITIALIZATION
@@ -182,6 +185,8 @@ namespace ReplayBufferPro
      * changed, and refreshes the dock buttons and hotkey names.
      */
     void applyProperties(const PropertiesDialog &dialog);
+    void rebuildCompactButtons();
+    void updateCompactButtonStates();
 
     /**
      * @brief Handles OBS frontend events for buffer state changes
