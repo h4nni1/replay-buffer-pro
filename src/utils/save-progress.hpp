@@ -14,6 +14,8 @@ public:
  static void finish(bool success, const QString &message);
  static void notice(const QString &message);
  static bool isBusy();
+ // Clears a stale successful result only after the save state is idle.
+ static void resetSuccessfulIfIdle();
  static void setJobs(uint64_t jobs);
 };
 }

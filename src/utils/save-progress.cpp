@@ -8,6 +8,7 @@
 #include <chrono>
 namespace ReplayBufferPro {
 namespace {
+constexpr auto kSuccessStatusLifetime = std::chrono::seconds(5);
 struct State {
  QString message, notice;
  int seconds = 0;
@@ -15,6 +16,7 @@ struct State {
  int64_t bytes = 0;
  bool active = false, memory = false, verify = false, success = false, finished = false;
  std::chrono::steady_clock::time_point start;
+ std::chrono::steady_clock::time_point finishedAt;
 };
 std::mutex stateMutex;
 State state;
@@ -41,9 +43,26 @@ void SaveProgress::verifying() {
 void SaveProgress::finish(bool success, const QString &message) {
  std::lock_guard<std::mutex> lock(stateMutex);
  state.active = false; state.success = success; state.finished = true; state.message = message;
+ state.finishedAt = success ? std::chrono::steady_clock::now()
+                             : std::chrono::steady_clock::time_point{};
 }
 void SaveProgress::notice(const QString &message) {
  std::lock_guard<std::mutex> lock(stateMutex); state.notice = message;
+}
+void SaveProgress::resetSuccessfulIfIdle() {
+ std::lock_guard<std::mutex> lock(stateMutex);
+ if (!state.success || !state.finished || state.active || state.jobs != 0 ||
+     state.finishedAt.time_since_epoch().count() == 0 ||
+     std::chrono::steady_clock::now() - state.finishedAt < kSuccessStatusLifetime) {
+  return;
+ }
+ // Leave any later active/queued job alone. This branch is only reached when
+ // the completed success is the last known save job.
+ state.finished = false;
+ state.success = false;
+ state.message.clear();
+ state.notice.clear();
+ state.finishedAt = std::chrono::steady_clock::time_point{};
 }
 bool SaveProgress::isBusy() {
  std::lock_guard<std::mutex> lock(stateMutex); return state.active || state.jobs > 0;
@@ -67,6 +86,7 @@ QWidget *SaveProgress::createWidget(QWidget *parent, bool compact) {
  layout->addWidget(label); layout->addWidget(bar); layout->addWidget(note);
  auto *timer = new QTimer(box); timer->setInterval(250);
  QObject::connect(timer,&QTimer::timeout,box,[box,label,bar,badge,note,compact]() {
+  SaveProgress::resetSuccessfulIfIdle();
   if (!box->isVisible()) return;
   State s; { std::lock_guard<std::mutex> lock(stateMutex); s = state; }
   QString status, style;
@@ -88,7 +108,9 @@ QWidget *SaveProgress::createWidget(QWidget *parent, bool compact) {
   if (!s.active) {
    bar->hide();
    label->setVisible(!compact || (s.finished && !s.success));
-   if (!s.message.isEmpty() && label->text()!=s.message) label->setText(s.message);
+   const QString idleLabel = QString::fromUtf8("Сохранение клипов: готов к работе");
+   const QString shownMessage = s.message.isEmpty() ? idleLabel : s.message;
+   if (label->text()!=shownMessage) label->setText(shownMessage);
    return;
   }
   label->show();
